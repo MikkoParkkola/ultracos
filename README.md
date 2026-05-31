@@ -47,15 +47,36 @@ Every path is fail-open. Binaries are reproducible from the in-repo source via
 See [`ultracos-core/`](ultracos-core/) for the codec source — it is fully open;
 read every line. Configuration lives in the env-var table inside the codec docs.
 
-## Calibration: open results, kept-fresh by a private loop
+## Calibration — a published snapshot, kept current as a service
 
 The codec's keep-vs-compress boundary depends on a token estimate. UltraCoS ships
-a small, signed **calibration snapshot** that tunes that estimate to the model's
-real tokenizer. The snapshot is open data — inspect it, use it, fork it — but it
-is **kept fresh by a private learning loop** that measures the live tokenizer
-from real traffic. When a model's tokenizer changes, our loop re-fits and ships
-an updated snapshot; a frozen copy keeps working but stops tracking the change.
-You enjoy the result without needing to reproduce how it is made.
+a **calibration snapshot**: a small data file of per-model `tokens-per-char`
+values. Those values are fitted from real, model-billed token counts, so the
+estimate matches a model's actual tokenizer rather than a fixed assumption. The
+fallback, when no snapshot value applies, is the classic 4-characters-per-token
+estimate.
+
+### What is public vs what is not
+
+| Public (in this repo) | Private (not shared) |
+|---|---|
+| The codec source — every line, inspectable. | The learning loop that produces snapshots. |
+| The published calibration snapshot — the numbers, the schema, and the version. | The data, the method, and the fitting pipeline that generate those numbers. |
+
+You can read, run, fork, and audit everything here. The snapshot is a **result you
+can use**; reproducing it would require the private loop, which is not part of this
+repository.
+
+### It is a snapshot, and it is a service
+
+A model's tokenizer can change with a model update, and no changelog is published
+when it does. This snapshot is therefore **refreshed when a model's tokenizer
+changes** — that is the service. A frozen copy keeps working under the license,
+but it stops tracking changes after the tokenizer moves; a refreshed snapshot
+tracks it.
+
+Every value in a published snapshot is fitted from measured token counts. The
+project does not publish performance or savings claims it has not measured.
 
 ## License
 
