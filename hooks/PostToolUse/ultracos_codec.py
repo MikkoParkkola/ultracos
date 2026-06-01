@@ -334,7 +334,7 @@ def codec_pays_back_at(
 ) -> bool:
     """Quick gate: does compaction pay back given an expected turn budget?
 
-    Use in downstream policy code to reject
+    Use in policy code (e.g. the proxy-controller UES2 gate) to reject
     compactions that won't recover their cost before the session ends.
     """
     return expected_remaining_turns >= compaction_break_even_turns(compression_ratio)

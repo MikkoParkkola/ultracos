@@ -126,7 +126,7 @@ fn main() -> Result<()> {
             let mut buf = String::new();
             std::io::stdin().read_to_string(&mut buf)?;
             print!("{}", codec::compress(&buf));
-            eprintln!("ultracos: ULTRACOS-L1 lossless compression (x-ultracos-transformer=ultracos-l1)");
+            eprintln!("the proxy: ULTRACOS-L1 lossless compression (x-the proxy-transformer=ultracos-l1)");
             Ok(())
         }
         Some("expand") => {
@@ -134,6 +134,112 @@ fn main() -> Result<()> {
             let mut buf = String::new();
             std::io::stdin().read_to_string(&mut buf)?;
             print!("{}", codec::expand(&buf));
+            Ok(())
+        }
+        Some("dialect-export") => {
+            // Dump the compiled-in default dialect as an ordered JSON array of
+            // [dense, prose] pairs. Edit + point ULTRACOS_DIALECT at the result to
+            // customize compression with NO rebuild (lossless self-check on load).
+            println!("{}", codec::Dialect::bundled_default().to_json());
+            Ok(())
+        }
+        // Compress static config files (CLAUDE.md, skills, agent descriptions)
+        // with the active dialect — the system prompt ships on EVERY request, so
+        // this is the only always-on saving. DRY-RUN by default (never writes).
+        // --apply writes, but ONLY files whose round-trip is lossless, and ALWAYS
+        // backs up to <file>.ultracos.bak first. expand the file (or restore the
+        // .bak) to reverse.
+        Some("compress-config") => {
+            let rest: Vec<&str> = args.iter().skip(1).map(|s| s.as_str()).collect();
+            let apply = rest.contains(&"--apply");
+            let json = rest.contains(&"--json");
+            let paths: Vec<&str> = rest
+                .iter()
+                .copied()
+                .filter(|a| !a.starts_with("--"))
+                .collect();
+            if paths.is_empty() {
+                eprintln!("usage: ultracos-core compress-config [--apply] [--json] <file>...");
+                std::process::exit(2);
+            }
+            let mut total_saved = 0i64;
+            for path in paths {
+                let content = match std::fs::read_to_string(path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("skip {path}: {e}");
+                        continue;
+                    }
+                };
+                let r = codec::compress_config(&content);
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "path": path,
+                            "lossless": r.lossless,
+                            "already_dense": r.already_dense,
+                            "original_tokens": r.original_tokens,
+                            "compressed_tokens": r.compressed_tokens,
+                            "saved_tokens": r.saved_tokens(),
+                            "savings_pct": (r.savings_pct() * 100.0).round() / 100.0,
+                        })
+                    );
+                } else {
+                    let warn_lossless = if r.lossless {
+                        ""
+                    } else {
+                        "  [NOT LOSSLESS — will not write]"
+                    };
+                    let warn_dense = if r.already_dense {
+                        "  [already dense?]"
+                    } else {
+                        ""
+                    };
+                    println!(
+                        "{path}: {} -> {} tokens ({:.1}% saved){warn_lossless}{warn_dense}",
+                        r.original_tokens,
+                        r.compressed_tokens,
+                        r.savings_pct()
+                    );
+                }
+                if apply {
+                    if !r.safe_to_apply() {
+                        eprintln!("REFUSE {path}: round-trip not lossless; left untouched");
+                        continue;
+                    }
+                    if r.saved_tokens() <= 0 {
+                        eprintln!("skip {path}: no savings; left untouched");
+                        continue;
+                    }
+                    let bak = format!("{path}.ultracos.bak");
+                    if std::path::Path::new(&bak).exists() {
+                        eprintln!("REFUSE {path}: backup {bak} exists; remove it first");
+                        continue;
+                    }
+                    if let Err(e) = std::fs::write(&bak, &content) {
+                        eprintln!("REFUSE {path}: cannot write backup {bak}: {e}");
+                        continue;
+                    }
+                    if let Err(e) = std::fs::write(path, &r.compressed) {
+                        eprintln!("ERROR {path}: write failed after backup: {e}");
+                        continue;
+                    }
+                    total_saved += r.saved_tokens();
+                    eprintln!("WROTE {path} (backup: {bak})");
+                } else if r.lossless {
+                    total_saved += r.saved_tokens().max(0);
+                }
+            }
+            if apply {
+                eprintln!("applied: {total_saved} tokens saved across written files.");
+            } else {
+                eprintln!(
+                    "dry-run: {total_saved} tokens would be saved. Re-run with --apply \
+                     to write (each file is backed up to <file>.ultracos.bak first; \
+                     restore the .bak or run `ultracos-core expand` to reverse)."
+                );
+            }
             Ok(())
         }
         Some("stats") => {
@@ -178,7 +284,7 @@ fn main() -> Result<()> {
         }
         Some(other) => {
             anyhow::bail!(
-                "unknown subcommand: {other}; supported: compact, compact-payload, cache-sig, cache-bypass, anchor-revert, dedup, compress, expand, stats, attest, verify, version"
+                "unknown subcommand: {other}; supported: classify, summarize, compact, compact-payload, cache-sig, cache-bypass, anchor-revert, dedup, compress, expand, stats, attest, verify, version"
             );
         }
         None => {

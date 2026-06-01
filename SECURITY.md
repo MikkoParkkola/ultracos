@@ -49,7 +49,7 @@ is opt-in, off-path, and clearly marked.
 The `hooks/PostToolUse/ultracos_codec.py` module imports zero
 network-capable modules (verified by lint: no `urllib`, no `requests`,
 no `socket`, no `http.client`, no `urllib3`). Future PRs touching the
-hook MUST preserve this invariant; CI will lint for this invariant
+hook MUST preserve this invariant; CI will lint for it once internal-ref
 (G5 GitHub Actions) lands.
 
 ## Threat model

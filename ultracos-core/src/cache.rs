@@ -3,7 +3,7 @@
 //! Backs off compression on cache-hot prefixes so the Anthropic native prompt
 //! cache key stays stable — compressing a payload whose long stable prefix is
 //! already cached upstream mutates the cache key and forces a fresh fetch
-//! (the prompt-cache-busting class). Heuristic: a prefix observed >= hot_hits
+//! (the A7 internal cache-drain class). Heuristic: a prefix observed >= hot_hits
 //! times within TTL is treated as cache-hot and bypasses compaction.
 //!
 //! Default OFF (`ULTRACOS_CACHE_AWARE`), so in the flipped-default rust path

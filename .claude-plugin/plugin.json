@@ -6,9 +6,9 @@
     "name": "Mikko Parkkola",
     "email": "mikko.parkkola@iki.fi"
   },
-  "homepage": "https://github.com/MikkoParkkola/ultracos",
-  "repository": "https://github.com/MikkoParkkola/ultracos",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "homepage": "https://github.com/MikkoParkkola/claude-plugins",
+  "repository": "https://github.com/MikkoParkkola/claude-plugins",
+  "license": "MIT",
   "category": "Token Optimization",
   "keywords": [
     "token-compression",

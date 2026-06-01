@@ -9,15 +9,121 @@ prebuilt native binary on the hot path, Python as the portable fallback).
 It is free for noncommercial use (PolyForm Noncommercial 1.0.0); commercial use
 needs a paid license — see [COMMERCIAL.md](COMMERCIAL.md).
 
-## Install
+---
+
+> **Your agent's tool output is mostly noise** — ANSI codes, repeated reads,
+> machine chatter, verbose compaction summaries. UltraCoS strips it **losslessly,
+> on-device, before it bills** — and stacks *on top of* Anthropic's prompt cache.
+
+| Measured | Reduction | On |
+|---|---:|---|
+| Tool-heavy session corpus (52 real fixtures) | **−31.7%** | total tokens 85,405 → 58,347 |
+| Large `Bash` dumps | **−71.1%** | the noisiest payloads |
+| Instruction prose in the ULTRACOS-L1 dialect | **−44.6%** | every cached system-prompt call |
+| Network calls · API keys · data leaving your machine | **0** | 100% local, fail-open |
+
+<sub>Numbers are reproducible from [`bench/`](./bench/) (`codec_bench.py`), not asserted. Dialect figure: `opus-dialect-validate-2026-05-31`. The project does not publish figures it has not measured.</sub>
+
+## How it works
+
+UltraCoS hooks the request lifecycle at six points; every one fails open
+(`{"continue": true}` on any error — it can never block your input):
+
+```mermaid
+flowchart LR
+  U([Your prompt]) --> UPS[UserPromptSubmit<br/>mode detector]
+  UPS --> PRE[PreToolUse<br/>history dedup]
+  PRE --> TOOL[(Tool runs)]
+  TOOL --> POST[PostToolUse<br/>codec + session dedup]
+  POST --> Q{compaction?}
+  Q -- yes --> PC[PreCompact<br/>dense-form mandate]
+  Q -- no --> R([Reply — never compressed])
+  PC --> R
+```
+
+It does **not** fight Anthropic's cache — it works on a different token bucket.
+Native caching discounts what is *already cached*; UltraCoS shrinks the
+turn-to-turn traffic that changes every call and therefore *never* caches, plus
+the dense form of what *does* get cached. The two stack:
+
+```mermaid
+flowchart TB
+  subgraph B[What you are billed per call]
+    P[Stable prefix<br/>system prompt + tools]
+    T[Turn-to-turn traffic<br/>tool results, history, compaction]
+  end
+  P -->|Anthropic cache: up to −90%| C[cheap]
+  P -->|UltraCoS dialect: −44.6% of what caches| C
+  T -->|UltraCoS codec: −31.7% corpus| S[shrunk every call]
+  C --> L([Lower total])
+  S --> L
+```
+
+The hot path is a prebuilt native binary; Python is the portable fallback:
+
+```mermaid
+flowchart LR
+  H[PostToolUse hook] --> Qb{native binary<br/>available?}
+  Qb -- yes --> Rb[Rust codec ~5 ms]
+  Qb -- "no / ULTRACOS_RUST=0" --> Py[Python codec ~170 ms]
+  Rb --> O([compacted output<br/>identical, fail-open])
+  Py --> O
+```
+
+## Quickstart — first 5 minutes
 
 ```sh
 claude plugin marketplace add MikkoParkkola/ultracos
 claude plugin install ultracos
 ```
 
-Hooks fire automatically on the next session. Run `ultracos-stats` to see savings,
-`ultracos-set-level` to change aggressiveness.
+1. **Restart your session.** Hooks fire automatically — nothing to configure.
+2. **Use Claude normally** for a few tool-heavy turns (reads, greps, bash).
+3. **Check what it saved:** run `ultracos-stats` — it reads the append-only audit
+   log and prints per-tool savings (so the effect is measured, not asserted).
+4. **Tune aggressiveness** with `ultracos-set-level` if you want more or less.
+5. **Verify losslessness yourself:** `echo "<dense prose>" | ultracos-core compress | ultracos-core expand` round-trips byte-for-byte.
+
+Nothing leaves your machine; if anything errors, the original output passes
+through untouched. To pause, set `ULTRACOS_DISABLE=1`.
+
+## How it compares
+
+UltraCoS is one layer in the token-cost stack, not a replacement for the others —
+it composes with native caching and is a different shape from edge proxies and
+learned compressors:
+
+| | UltraCoS | Anthropic cache alone | Edge proxy (e.g. Edgee) | Learned compressor (e.g. LLMLingua-2) |
+|---|---|---|---|---|
+| Where it runs | in-process plugin | platform | hosted proxy hop | local model |
+| Acts on | tool results + compaction + dialect | already-cached prefixes | tool results + output | prompt text |
+| Network hop | none | n/a | yes | none (loads a model) |
+| Reversibility | lossless by meaning | lossless | partial | lossy (learned drop) |
+| API keys / signup | none | n/a | account | none |
+| Stacks with native cache | yes (independent bucket) | — | yes | yes |
+| Data residency | on your machine | platform | proxy provider | on your machine |
+
+Pick UltraCoS for in-process execution, data residency, and zero signup. Pick an
+edge proxy if a network hop is acceptable and you want one layer across multiple
+agents. They are not mutually exclusive.
+
+## The UltraCoS family
+
+UltraCoS is a token-cost-reduction system for LLM coding agents. The pieces have
+distinct roles:
+
+- **UltraCoS Plugin** (this repo) — the free, client-side codec for Claude Code.
+- **UltraCoS Verify** (`ultracos-verify`) — an MIT tool so savings can be verified
+  independently, without trusting the provider.
+- A managed offering — spend visibility and prompt-cache protection for teams
+  running Claude Code at scale — is available on inquiry (see [COMMERCIAL.md](COMMERCIAL.md)).
+
+The plugin is free and complete on its own; the rest is optional.
+
+## Install
+
+See [Quickstart](#quickstart--first-5-minutes) above — two commands, then restart
+your session. `ultracos-stats` shows savings; `ultracos-set-level` tunes aggressiveness.
 
 ## What it does (the wired features)
 

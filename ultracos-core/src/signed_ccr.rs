@@ -2,7 +2,7 @@
 //!
 //! Each attestation binds: arc session, arc event index, payload hash
 //! (sha256 of canonical-JSON event body), and an optional prompt-cache
-//! prefix-hash (the upstream-truth prefix signal). The chain
+//! prefix-hash (the PHBB upstream-truth signal from the proxy). The chain
 //! field carries the sha256 of the previous attestation's signature so
 //! the JSONL log is tamper-evident end-to-end.
 //!

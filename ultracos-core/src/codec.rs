@@ -196,36 +196,211 @@ const PAIRS: &[(&str, &str)] = &[
     (r####"|"####, r####", "####),
 ];
 
-/// Longest-prose-first so specific phrases map before substrings.
-fn compress_pairs() -> Vec<(&'static str, &'static str)> {
-    let mut v: Vec<(&str, &str)> = PAIRS.iter().map(|(d, p)| (*p, *d)).collect();
-    v.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-    v
+/// A loadable ULTRACOS dialect: an ordered table of (dense, prose) pairs.
+///
+/// Order is load-bearing. `compress`/`expand` build length-sorted views with a
+/// STABLE sort, so equal-length ties preserve table order. Any (de)serialization
+/// MUST preserve order — that is why the on-disk form is an ordered JSON array of
+/// `[dense, prose]` pairs, never a map (map iteration would scramble ties and the
+/// byte-for-byte output would drift from the compiled-in default).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dialect {
+    /// (dense, prose) pairs in canonical order (same order as the bundled default).
+    pairs: Vec<(String, String)>,
 }
 
-/// Longest-dense-first so specific dense tokens expand before substrings.
-fn expand_pairs() -> Vec<(&'static str, &'static str)> {
-    let mut v: Vec<(&str, &str)> = PAIRS.to_vec();
-    v.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-    v
+impl Dialect {
+    /// The compiled-in default dialect (bundled fallback). Always available, always
+    /// lossless — this is the table that ships in the binary.
+    pub fn bundled_default() -> Self {
+        Dialect {
+            pairs: PAIRS
+                .iter()
+                .map(|(d, p)| ((*d).to_string(), (*p).to_string()))
+                .collect(),
+        }
+    }
+
+    /// Build from an ordered (dense, prose) list. Does not validate losslessness.
+    pub fn from_pairs(pairs: Vec<(String, String)>) -> Self {
+        Dialect { pairs }
+    }
+
+    /// Longest-prose-first (prose, dense) view — specific phrases before substrings.
+    fn compress_pairs(&self) -> Vec<(&str, &str)> {
+        let mut v: Vec<(&str, &str)> = self
+            .pairs
+            .iter()
+            .map(|(d, p)| (p.as_str(), d.as_str()))
+            .collect();
+        v.sort_by_key(|x| std::cmp::Reverse(x.0.len()));
+        v
+    }
+
+    /// Longest-dense-first (dense, prose) view — specific dense tokens before substrings.
+    fn expand_pairs(&self) -> Vec<(&str, &str)> {
+        let mut v: Vec<(&str, &str)> = self
+            .pairs
+            .iter()
+            .map(|(d, p)| (d.as_str(), p.as_str()))
+            .collect();
+        v.sort_by_key(|x| std::cmp::Reverse(x.0.len()));
+        v
+    }
+
+    /// prose -> dense (lossless; unrecognized text passes through).
+    pub fn compress(&self, prose: &str) -> String {
+        let mut out = prose.to_string();
+        for (p, d) in self.compress_pairs() {
+            out = out.replace(p, d);
+        }
+        out
+    }
+
+    /// dense -> prose (reverse).
+    pub fn expand(&self, dense: &str) -> String {
+        let mut out = dense.to_string();
+        for (d, p) in self.expand_pairs() {
+            out = out.replace(d, p);
+        }
+        out
+    }
+
+    /// Losslessness self-check: `expand(compress(x)) == x` for every prose value in
+    /// the table. Guards the line-3 reversibility contract for hand-edited / fetched
+    /// dialects — collisions or bad ordering are caught HERE, before any traffic is
+    /// touched, so a bad config degrades to the bundled default instead of corrupting.
+    fn is_lossless(&self) -> bool {
+        self.pairs
+            .iter()
+            .all(|(_d, prose)| self.expand(&self.compress(prose)) == *prose)
+    }
+
+    /// Parse an ordered JSON array of `[dense, prose]` pairs.
+    pub fn from_json(s: &str) -> Result<Self, String> {
+        let raw: Vec<(String, String)> =
+            serde_json::from_str(s).map_err(|e| format!("dialect json parse: {e}"))?;
+        Ok(Dialect::from_pairs(raw))
+    }
+
+    /// Serialize to an ordered JSON array of `[dense, prose]` pairs (round-trips to
+    /// the same Dialect; used to generate the bundled baseline from the const table).
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(&self.pairs).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    /// Resolve the active dialect: env-pointed file -> parse -> lossless check -> use,
+    /// else fall back to the bundled default. Fail-open at every step so the codec can
+    /// never break on a missing, malformed, or non-lossless config file.
+    fn resolve() -> Self {
+        let Some(path) = dialect_path() else {
+            return Dialect::bundled_default();
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(_) => return Dialect::bundled_default(),
+        };
+        match Dialect::from_json(&text) {
+            Ok(d) if d.is_lossless() => d,
+            Ok(_) => {
+                eprintln!(
+                    "ultracos: dialect at {} failed lossless self-check; using bundled default",
+                    path.display()
+                );
+                Dialect::bundled_default()
+            }
+            Err(e) => {
+                eprintln!("ultracos: {e}; using bundled default");
+                Dialect::bundled_default()
+            }
+        }
+    }
 }
 
-/// prose -> dense (lossless; unrecognized text passes through).
+/// Discover the dialect file path. P0 keeps discovery minimal — a single
+/// `ULTRACOS_DIALECT` env override. P3 adds the bundled-baseline path and the
+/// optional license-gated fetch endpoint; the binary still just reads a file.
+fn dialect_path() -> Option<std::path::PathBuf> {
+    match std::env::var_os("ULTRACOS_DIALECT") {
+        Some(p) if !p.is_empty() => Some(std::path::PathBuf::from(p)),
+        _ => None,
+    }
+}
+
+/// Process-global active dialect, loaded once on first use. The global is the only
+/// `OnceLock` — kept thin on purpose so tests/harnesses inject `Dialect` instances
+/// directly (a write-once global would make multi-dialect parity tests pass for the
+/// wrong reason).
+fn global_dialect() -> &'static Dialect {
+    static GLOBAL: std::sync::OnceLock<Dialect> = std::sync::OnceLock::new();
+    GLOBAL.get_or_init(Dialect::resolve)
+}
+
+/// prose -> dense (lossless; unrecognized text passes through). Uses the active dialect.
 pub fn compress(prose: &str) -> String {
-    let mut out = prose.to_string();
-    for (p, d) in compress_pairs() {
-        out = out.replace(p, d);
-    }
-    out
+    global_dialect().compress(prose)
 }
 
-/// dense -> prose (reverse).
+/// dense -> prose (reverse). Uses the active dialect.
 pub fn expand(dense: &str) -> String {
-    let mut out = dense.to_string();
-    for (d, p) in expand_pairs() {
-        out = out.replace(d, p);
+    global_dialect().expand(dense)
+}
+
+/// Result of previewing a static-config compression (CLAUDE.md, a skill, an
+/// agent description). The system prompt ships on EVERY request, so compressing
+/// it with the active dialect is the only always-on, every-call saving — but it
+/// is destructive to a file the user authored, so the lossless gate is mandatory
+/// before anything is written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigCompression {
+    pub compressed: String,
+    /// expand(compress(x)) == x for THIS file. If false, never write it.
+    pub lossless: bool,
+    /// The file already contains dialect dense-tokens (expand would change it),
+    /// so it may already be compressed — surfaced as a caution, not a blocker.
+    pub already_dense: bool,
+    pub original_tokens: i64,
+    pub compressed_tokens: i64,
+}
+
+impl ConfigCompression {
+    pub fn saved_tokens(&self) -> i64 {
+        self.original_tokens - self.compressed_tokens
     }
-    out
+    pub fn savings_pct(&self) -> f64 {
+        if self.original_tokens <= 0 {
+            0.0
+        } else {
+            (self.saved_tokens() as f64 / self.original_tokens as f64) * 100.0
+        }
+    }
+    /// Safe to write iff the round-trip is lossless. The whole feature rests here.
+    pub fn safe_to_apply(&self) -> bool {
+        self.lossless
+    }
+}
+
+impl Dialect {
+    /// Preview compressing a user-authored config file. Computes the compressed
+    /// form, verifies losslessness against THIS dialect, and estimates token
+    /// savings. Never writes — the caller decides, gated on `safe_to_apply()`.
+    pub fn compress_config(&self, content: &str) -> ConfigCompression {
+        let compressed = self.compress(content);
+        let lossless = self.expand(&compressed) == content;
+        let already_dense = self.expand(content) != content;
+        ConfigCompression {
+            original_tokens: estimate_tokens(content),
+            compressed_tokens: estimate_tokens(&compressed),
+            compressed,
+            lossless,
+            already_dense,
+        }
+    }
+}
+
+/// Preview compressing a config file with the active (global) dialect.
+pub fn compress_config(content: &str) -> ConfigCompression {
+    global_dialect().compress_config(content)
 }
 
 /// Bounded truncation (internal-ref layer 10): ONLY above line_cap, marker NEVER inline,
@@ -1091,14 +1266,14 @@ mod tests {
     #[test]
     fn path_list_prefix_factoring_and_tag() {
         let lines: Vec<String> = (0..40)
-            .map(|i| format!("/home/user/project/src/file_{i:03}.rs"))
+            .map(|i| format!("/home/user/github/claude-plugins/ultracos/file_{i:03}.rs"))
             .collect();
         let text = lines.join("\n");
         let out = compact_payload(&text);
         assert!(out.starts_with("[ultracos:compact-v1 shape=path-list"));
         assert!(out.contains("applied=path-prefix-factor"));
         assert!(
-            out.contains("[ultracos:cpc-v1 prefix=/home/user/project/src/")
+            out.contains("[ultracos:cpc-v1 prefix=/home/user/github/claude-plugins/ultracos/")
         );
     }
 
@@ -1147,5 +1322,164 @@ mod tests {
         assert_eq!(collapse_blanks("a   \n\n\n\n\nb"), "a\n\nb");
         assert_eq!(collapse_blanks("a\n\nb"), "a\n\nb"); // 2 preserved
         assert_eq!(collapse_blanks("trail \t\nx"), "trail\nx");
+    }
+
+    // ── P0: dialect externalization parity harness ──────────────────────────
+    // Proves both halves of the P0 AC without a rebuild:
+    //  (1) a default-equivalent dialect.json yields byte-identical output;
+    //  (2) a hand-edited dialect.json changes behavior.
+    // All cases use Dialect instances directly (never the OnceLock global), so a
+    // write-once global cannot make a multi-dialect test green for the wrong reason.
+
+    /// Representative corpus: real dialect prose + arbitrary passthrough text.
+    fn parity_corpus() -> Vec<String> {
+        vec![
+            "Before creating any new hook, skill, or agent, search the existing codebase exhaustively".to_string(),
+            "if any test is failing".to_string(),
+            "stop all other work immediately. Fix the bug. Verify the fix passes. Only then continue".to_string(),
+            "The quantum flux capacitor needs 1.21 gigawatts at node xj-42.".to_string(),
+            "mixed: if there is a lint error and bandit recursive at medium severity\nplus arbitrary tail".to_string(),
+        ]
+    }
+
+    #[test]
+    fn bundled_default_is_lossless() {
+        assert!(Dialect::bundled_default().is_lossless());
+    }
+
+    #[test]
+    fn default_json_roundtrips_to_const_table() {
+        // Generating dialect.json from the const table and parsing it back MUST
+        // reproduce the exact same Dialect — catches raw-string/JSON escaping loss.
+        let def = Dialect::bundled_default();
+        let json = def.to_json();
+        let reloaded = Dialect::from_json(&json).expect("generated dialect.json must parse");
+        assert_eq!(
+            reloaded, def,
+            "round-tripped dialect.json drifted from const"
+        );
+    }
+
+    #[test]
+    fn default_equivalent_file_is_byte_identical() {
+        // Zero-regression AC: a dialect LOADED from the default-equivalent JSON must
+        // produce byte-for-byte the same output as both the const default and the
+        // free `compress`/`expand` (which, with no env override, use the default).
+        let loaded = Dialect::from_json(&Dialect::bundled_default().to_json()).unwrap();
+        for input in parity_corpus() {
+            let c_loaded = loaded.compress(&input);
+            assert_eq!(c_loaded, compress(&input), "compress drift vs free fn");
+            assert_eq!(
+                c_loaded,
+                Dialect::bundled_default().compress(&input),
+                "compress drift vs const"
+            );
+            assert_eq!(loaded.expand(&c_loaded), expand(&compress(&input)));
+            // and still lossless end-to-end
+            assert_eq!(loaded.expand(&c_loaded), input);
+        }
+    }
+
+    #[test]
+    fn hand_edited_dialect_changes_behavior_no_rebuild() {
+        // Take the default table and append a NEW pair. Same binary, different data:
+        // a phrase that the default passes through now compresses.
+        let phrase = "telemetry sink saturation backpressure";
+        // default leaves it untouched
+        assert_eq!(Dialect::bundled_default().compress(phrase), phrase);
+
+        let mut pairs: Vec<(String, String)> =
+            serde_json::from_str(&Dialect::bundled_default().to_json()).unwrap();
+        pairs.push(("TSB".to_string(), phrase.to_string()));
+        let edited = Dialect::from_pairs(pairs);
+
+        let out = edited.compress(phrase);
+        assert_ne!(out, phrase, "hand-edited dialect must change behavior");
+        assert_eq!(out, "TSB");
+        assert_eq!(edited.expand(&out), phrase, "edit must stay lossless");
+        assert!(edited.is_lossless());
+    }
+
+    #[test]
+    fn non_lossless_dialect_is_rejected_by_self_check() {
+        // Two distinct prose values collide onto the same dense token — expand can
+        // only recover one, so the round-trip breaks. is_lossless must catch it.
+        let colliding = Dialect::from_pairs(vec![
+            ("X".to_string(), "apple".to_string()),
+            ("X".to_string(), "banana".to_string()),
+        ]);
+        assert!(
+            !colliding.is_lossless(),
+            "collision must fail the self-check so resolve() falls back to default"
+        );
+    }
+
+    #[test]
+    fn empty_env_path_resolves_to_bundled_default() {
+        // No ULTRACOS_DIALECT set in the test process -> dialect_path() is None ->
+        // resolve() yields the bundled default. (Asserted via dialect_path, never
+        // mutating process env, to keep the OnceLock global uncontaminated.)
+        assert!(dialect_path().is_none());
+        assert_eq!(Dialect::resolve(), Dialect::bundled_default());
+    }
+
+    // ── compress-config: dogfood the dialect on static config files ──────────
+
+    #[test]
+    fn compress_config_is_lossless_and_saves_on_dialect_content() {
+        // A line built from real dialect prose must compress AND round-trip.
+        let content = "Before creating any new hook, skill, or agent, search the existing \
+             codebase exhaustively. If any test is failing, stop all other work \
+             immediately. Fix the bug. Verify the fix passes. Only then continue.";
+        let r = Dialect::bundled_default().compress_config(content);
+        assert!(r.lossless, "config compression must round-trip");
+        assert!(r.safe_to_apply());
+        assert!(
+            r.compressed_tokens < r.original_tokens,
+            "dialect prose should shrink"
+        );
+        assert!(r.savings_pct() > 0.0);
+        // and expand recovers the exact original (the apply-safety contract)
+        assert_eq!(Dialect::bundled_default().expand(&r.compressed), content);
+    }
+
+    #[test]
+    fn compress_config_passthrough_is_lossless_zero_savings() {
+        // Arbitrary prose with no dialect matches: unchanged, lossless, 0 saved.
+        let content = "The quantum flux capacitor needs 1.21 gigawatts at node xj-42.";
+        let r = Dialect::bundled_default().compress_config(content);
+        assert!(r.lossless);
+        assert_eq!(r.compressed, content);
+        assert_eq!(r.saved_tokens(), 0);
+        assert!(!r.already_dense, "plain prose is not already-dense");
+    }
+
+    #[test]
+    fn compress_config_flags_already_dense_content() {
+        // Content that already contains dense tokens (e.g. a prior compression)
+        // is flagged. Re-compressing it does NOT round-trip (compress is ~a no-op
+        // but expand over-expands), so safe_to_apply() is false — the feature
+        // refuses to touch an already-compressed file. Both signals agree: leave it.
+        let dense = Dialect::bundled_default()
+            .compress("if any test is failing, stop all other work immediately");
+        let r = Dialect::bundled_default().compress_config(&dense);
+        assert!(r.already_dense, "dense input must be flagged");
+        assert!(
+            !r.safe_to_apply(),
+            "already-dense content must not be applied (over-expansion risk)"
+        );
+    }
+
+    #[test]
+    fn compress_config_savings_pct_math() {
+        let r = ConfigCompression {
+            compressed: String::new(),
+            lossless: true,
+            already_dense: false,
+            original_tokens: 200,
+            compressed_tokens: 150,
+        };
+        assert_eq!(r.saved_tokens(), 50);
+        assert!((r.savings_pct() - 25.0).abs() < 1e-9);
     }
 }

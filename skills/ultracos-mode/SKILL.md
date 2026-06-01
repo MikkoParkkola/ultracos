@@ -62,7 +62,7 @@ With `active-level=lite` only `lite` rows are kept; `full` keeps
 entirely.
 
 This replaces the three duplicated vocab blocks (one per level) that
-previously lived here; drift between them was a historical bug, now fixed.
+previously lived here; drift between them was the bug internal-ref fixed.
 
 <!-- register-variants:start -->
 | field | level | value |
