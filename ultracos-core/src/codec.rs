@@ -1482,4 +1482,24 @@ mod tests {
         assert_eq!(r.saved_tokens(), 50);
         assert!((r.savings_pct() - 25.0).abs() < 1e-9);
     }
+
+    #[test]
+    fn compact_payload_is_deterministic_cache_stable() {
+        // CACHE-SAFETY INVARIANT: the same payload always compacts to the same
+        // bytes. A tool result that later becomes part of an Anthropic prompt-cache
+        // prefix must therefore stay byte-stable across turns — non-determinism here
+        // would mutate a cached prefix and force a full re-fetch (the internal class).
+        for s in [
+            "\x1b[31merror\x1b[0m at foo.rs:42\n\n\n\nbuild failed",
+            "{\"a\":1,  \"b\":  2,  \"c\":[1,2,3]}",
+            "alpha\nbeta\ngamma\nunique tail line",
+            "If any test is failing, stop all other work immediately.",
+        ] {
+            assert_eq!(
+                compact_payload(s),
+                compact_payload(s),
+                "compaction must be deterministic — cache stability depends on it"
+            );
+        }
+    }
 }

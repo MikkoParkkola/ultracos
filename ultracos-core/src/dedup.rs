@@ -299,4 +299,37 @@ mod tests {
     fn non_dedup_tool_is_none() {
         assert!(maybe_dedup_or_summarize("Bash", "x", "s").is_none());
     }
+
+    #[test]
+    fn cache_safe_dedup_back_references_only_the_repeat() {
+        // CACHE-SAFETY INVARIANT: dedup replaces the REPEAT with a back-reference and
+        // never rewrites the earlier occurrence. The first occurrence is what may sit
+        // in a cached prefix; leaving it untouched is why the codec can't bust the
+        // Anthropic prompt cache. Isolated to a temp state dir.
+        let dir = std::env::temp_dir().join("ultracos-cachesafe-dedup-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: test-only; no other test reads ULTRACOS_STATE_DIR concurrently
+        // (the other dedup tests touch no state), so this env write does not race.
+        unsafe { std::env::set_var("ULTRACOS_STATE_DIR", &dir) };
+
+        let sid = "cache-safe-sid";
+        let content = "Read result body that repeats within the session";
+        // first occurrence: passes through unchanged (None) — the cacheable copy.
+        assert!(
+            maybe_dedup_or_summarize("Read", content, sid).is_none(),
+            "first occurrence must pass through unchanged (cacheable copy untouched)"
+        );
+        // second occurrence: only the CURRENT payload is back-referenced.
+        let (out, mode) =
+            maybe_dedup_or_summarize("Read", content, sid).expect("repeat must dedup");
+        assert_eq!(mode, "dedup");
+        assert!(
+            out.starts_with("[seen earlier this session:"),
+            "repeat -> back-ref to the earlier copy, which is never rewritten"
+        );
+
+        unsafe { std::env::remove_var("ULTRACOS_STATE_DIR") };
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

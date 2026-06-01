@@ -208,13 +208,34 @@ Binaries are reproducible from the in-repo source via [`bin/build.sh`](bin/build
 and verified by [`bin/SHA256SUMS`](bin/SHA256SUMS). The codec source is fully open —
 [`ultracos-core/`](ultracos-core/) — read every line.
 
+## Cache safety — why it can't bust your prompt cache
+
+Anthropic's prompt cache is the biggest token-cost lever there is, and mutating an
+already-cached prefix forces a full re-fetch at creation price — the worst failure
+mode in this space. **UltraCoS is cache-safe by construction, not by a flag:**
+
+- The codec acts only on **fresh tool-result output** (the appended tail), never on
+  the system-prompt / tool-definition prefix that gets cached.
+- Compaction is **deterministic** — the same payload always compacts to the same
+  bytes, so a tool result that later becomes part of a cached prefix stays stable.
+- **Session-dedup back-references the *repeat*** (`[seen earlier this session]`) and
+  never rewrites the earlier occurrence — the potentially-cached copy is untouched.
+- **History-dedup only appends an advisory note**; it does not rewrite prior turns.
+- The user-visible reply is never compressed.
+
+`ULTRACOS_CACHE_AWARE` (below) is optional defense-in-depth — a heuristic that backs
+off on prefixes it *infers* are cache-hot. It is **off by default because the
+structural guarantees above already protect the cache**, and the heuristic cannot
+see Anthropic's real cache state (it awaits `usage.cache_read_input_tokens`). Turn it
+on for belt-and-suspenders; you do not need it for correctness.
+
 ## Configuration
 
 | Env var | Default | Effect |
 |---|---|---|
 | `ULTRACOS_RUST` | on | Set `0` to force the Python codec. |
 | `ULTRACOS_ANCHOR_GUARD` | on | Set `0`/`off` to disable the anchor-survival revert (not recommended). |
-| `ULTRACOS_CACHE_AWARE` | off | When on, skips compacting content that is already a hot prompt-cache prefix, to keep the cache key stable. |
+| `ULTRACOS_CACHE_AWARE` | off | Optional defense-in-depth: backs off compaction on inferred cache-hot prefixes. Off because the codec is already cache-safe by construction (see [Cache safety](#cache-safety--why-it-cant-bust-your-prompt-cache)); on adds per-call disk I/O. |
 | `ULTRACOS_DATA_DIR` | `~/.ultracos` | Where the audit log and state live. |
 
 ## Calibration — a published snapshot, kept current as a service
