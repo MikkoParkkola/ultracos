@@ -1,8 +1,32 @@
 {
   "schema": "ultracos-calib-v1",
-  "snapshot_version": "2026.05.31",
+  "snapshot_version": "2026.06.02",
   "tokenizer_fingerprint": "uncalibrated-v0",
   "models": {
+    "gpt-5.4": {
+      "tokens_per_char": {
+        "_default": 0.2453
+      },
+      "confidence": {
+        "_default": 0.947
+      }
+    },
+    "gpt-5.4-mini": {
+      "tokens_per_char": {
+        "_default": 0.2453
+      },
+      "confidence": {
+        "_default": 0.947
+      }
+    },
+    "gpt-5.5": {
+      "tokens_per_char": {
+        "_default": 0.2453
+      },
+      "confidence": {
+        "_default": 0.947
+      }
+    },
     "claude-haiku-4-5-20251001": {
       "tokens_per_char": {
         "_default": 0.1885

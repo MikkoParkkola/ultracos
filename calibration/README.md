@@ -32,6 +32,19 @@ the models change.
 ## Status (honest)
 
 - The dialects here are real, fitted from measured token counts.
+- **2026.06.02 — GPT-5 (o200k) added.** `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`
+  fitted from real GPT-5/Codex sessions (60 sessions, ~1.96M chars, ~480K o200k
+  tokens): `tokens_per_char = 0.2453`, confidence `0.947`. The three share one rate
+  because they share the o200k tokenizer; the rate is a tokenizer×content property,
+  so per-id splits would be false precision. Only aggregate statistics were read
+  from traffic — no content is stored or published.
+  - Note, measured on the same traffic: the symbolic **substitution** dialect (the
+    `[dense, prose]` pairs — a different artifact from this rate file) reduces
+    general GPT coding traffic by ≈0%, because its vocabulary is convention-dense
+    prose that rarely occurs in ordinary tool-and-code sessions. The symbolic
+    dialect is a niche tool for convention-dense text, not a general-traffic
+    compressor, on any model. This `tokens_per_char` calibration is independent of
+    that and applies to all content.
 - Wiring the codec to read this file — including how the active model is
   identified at codec time — is the next step and is tracked. Until it lands, the
   codec uses the `0.25` fallback. This file is the artifact that step consumes.
