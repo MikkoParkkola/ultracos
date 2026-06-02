@@ -20,7 +20,9 @@ mod cache;
 mod codec;
 mod data_dir;
 mod dedup;
+mod extract;
 mod hook;
+mod rewind;
 mod signed_ccr;
 mod stats;
 
@@ -141,6 +143,48 @@ fn main() -> Result<()> {
             // [dense, prose] pairs. Edit + point ULTRACOS_DIALECT at the result to
             // customize compression with NO rebuild (lossless self-check on load).
             println!("{}", codec::Dialect::bundled_default().to_json());
+            Ok(())
+        }
+        // F1 (internal-ref): retrieve a rewind-stashed original (or a line range) by id.
+        // Usage: retrieve <session> <id> [A-B]   -> prints the exact original slice.
+        // The agent-facing recovery path for read section-extraction.
+        Some("retrieve") => {
+            let session = args.get(1).map(|s| s.as_str()).unwrap_or("");
+            let id = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            if session.is_empty() || id.is_empty() {
+                eprintln!("usage: ultracos-core retrieve <session> <id> [A-B]");
+                std::process::exit(2);
+            }
+            let range = args.get(3).map(|s| s.as_str());
+            match rewind::retrieve(session, id, range) {
+                Some(text) => print!("{text}"),
+                None => {
+                    eprintln!(
+                        "ultracos: rewind id {id} not found (evicted or expired); re-read the source"
+                    );
+                    std::process::exit(1);
+                }
+            }
+            Ok(())
+        }
+        // F1 (internal-ref): read section-extraction. stdin = a Read tool result.
+        // Extracts outline + anchors + head, stashes the original to rewind, and
+        // prints the extracted form (with retrieve markers). Pass-through if small.
+        Some("extract-read") => {
+            use std::io::Read;
+            let session = args.get(1).map(|s| s.as_str()).unwrap_or("default");
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            match extract::extract_read(session, &buf) {
+                Some(r) => {
+                    print!("{}", r.text);
+                    eprintln!(
+                        "ultracos: extracted {} -> {} tokens ({} lines rewound, id={})",
+                        r.original_tokens, r.extracted_tokens, r.dropped_lines, r.rewind_id
+                    );
+                }
+                None => print!("{buf}"),
+            }
             Ok(())
         }
         // Compress static config files (CLAUDE.md, skills, agent descriptions)
