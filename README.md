@@ -6,6 +6,10 @@ content, and steers compaction toward a dense form — all **lossless by meaning
 **fail-open** (any error passes the original through untouched), and fast (a
 prebuilt native binary on the hot path, Python as the portable fallback).
 
+It is **dogfooded in production daily** — the author runs it on their own Claude
+Code traffic — and only recently open-sourced. Lossless-by-meaning and fail-open
+are not aspirations; they are how it has had to behave to stay on every session.
+
 It is free for noncommercial use (PolyForm Noncommercial 1.0.0); commercial use
 needs a paid license — see [COMMERCIAL.md](COMMERCIAL.md).
 
@@ -70,6 +74,33 @@ flowchart LR
   Py --> O
 ```
 
+## ULTRACOS-L1 — the symbolic dialect at the core
+
+UltraCoS is named for its **CoS** — the *symbolic notation* it started as. ULTRACOS-L1
+is a **lossless prose↔dense transcoder**: it rewrites verbose, repetitive
+instruction-style prose (system prompts, `CLAUDE.md`, skill and agent files) into a
+compact symbolic dialect the **same model decodes natively**, then expands it back
+byte-for-byte.
+
+```
+expand(compress(x)) == x      # byte-identical for dialect content;
+                              # unrecognized text passes through untouched
+```
+
+**Why it matters:** the system prompt ships on *every* request, and dense instructions
+cost far fewer tokens while the model reads them just as well — so this is the only
+*always-on, every-call* saving. Measured **−44.6% token reduction on dialect content**
+(`opus-dialect-validate-2026-05-31`). It is the language behind the PreCompact
+dense-form mandate and the `compress-config` command — and it is **where the whole
+project began**. Every other mechanism (tool-result codec, dedup, the state-aware
+gate) stacks on top of it.
+
+**Model-specific dialects.** Tokenizers differ per model, so the dialect is a *data
+file* the binary loads at runtime (`ULTRACOS_DIALECT`) — tune or ship a dialect for
+your model with **no rebuild** (lossless self-check on load). `ultracos-core
+dialect-export` dumps the default to edit; `ultracos-core compress` / `expand` run it
+directly; `compress-config` applies it to your config files (dry-run + backup + lossless gate).
+
 ## Quickstart — first 5 minutes
 
 ```sh
@@ -96,7 +127,7 @@ not trying to be a learned compressor or a hosted proxy. The honest landscape
 
 | Approach | Examples | Reversible? | Where it runs | Best at |
 |---|---|---|---|---|
-| **Lossless in-process codec** (this) | **UltraCoS** (alpha) | yes (by meaning) | your machine, no hop | agent tool-results + dense compaction, stacked on cache |
+| **Lossless in-process codec** (this) | **UltraCoS** | yes (by meaning) | your machine, no hop | agent tool-results + dense compaction, stacked on cache |
 | Lossless reversible pipeline | [claw-compactor](https://github.com/open-compress/claw-compactor) (2.2k★) | yes | varies | multi-stage general-text compression |
 | Drop-in prompt compression | [leanctx](https://github.com/jia-gao/leanctx) (300★+) | varies | library | production-app prompt text |
 | Learned / lossy compression | [LLMLingua / LLMLingua-2](https://github.com/microsoft/LLMLingua) (6k★) | no (drops tokens) | local model | aggressive prompt-text reduction where some loss is acceptable |
@@ -107,7 +138,10 @@ not trying to be a learned compressor or a hosted proxy. The honest landscape
 | Task offload | houtini-lm | n/a | local LLM | delegating bounded subtasks off the paid model |
 
 Two honest notes:
-1. **UltraCoS is alpha and small** next to LLMLingua or claw-compactor. It competes on being **lossless + in-process + zero-setup + cache-stacking**, not on maturity or star count.
+1. **UltraCoS is small by star count** next to LLMLingua or claw-compactor — but it
+   is **dogfooded in production daily on real Claude Code traffic**, not a research
+   demo. Recently open-sourced, long battle-tested. It competes on being **lossless
+   + in-process + zero-setup + cache-stacking**.
 2. **These mostly compose.** A lossless codec, a learned compressor, and a spend dashboard solve different parts of the bill — running more than one is normal, not redundant. UltraCoS deliberately occupies the lossless-in-process slot and leaves the others to their strengths.
 
 ## General vs model-specific savings
@@ -169,23 +203,6 @@ Two guards make this safe:
 - **Anchor-survival guard** — a compaction that would drop the load-bearing
   `file:line`, error code, identifier, that made the output useful is automatically
   reverted. Truncation is the only lossy step, and it is anchor-guarded.
-
-## The ULTRACOS-L1 dialect language
-
-The codec binary also provides a **lossless prose↔dense transcoder** — the
-ULTRACOS-L1 dialect — exposed as `ultracos-core compress` / `ultracos-core expand`.
-It rewrites verbose, repetitive instruction-style prose into a denser dialect the
-same model decodes natively, and expands it back exactly:
-
-```
-expand(compress(x)) == x      # byte-identical for dialect content;
-                              # unrecognized text passes through untouched
-```
-
-It is round-trip lossless (verifiable: `compress | expand` reproduces the input
-byte-for-byte) and the codec source documents a **44.6% token reduction on dialect
-content** (`opus-dialect-validate-2026-05-31`). This is the language layer behind
-the PreCompact dense-form mandate.
 
 ## Architecture — and why there are Python files
 

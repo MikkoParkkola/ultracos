@@ -21,6 +21,7 @@ mod codec;
 mod data_dir;
 mod dedup;
 mod extract;
+mod gate;
 mod hook;
 mod rewind;
 mod signed_ccr;

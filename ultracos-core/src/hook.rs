@@ -45,6 +45,40 @@ fn anchor_guard_enabled() -> bool {
     }
 }
 
+/// Opt-in feature flag: true only for "1"/"true"/"yes"/"on" (default OFF).
+fn env_on(name: &str) -> bool {
+    matches!(
+        std::env::var(name)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// The F2 gate's `target`: the tool's subject. file path for Read/Edit/Write,
+/// command for Bash, else a best-effort tool_input string. Empty if absent.
+fn gate_target(payload: &Value, tool: &str) -> String {
+    let input = payload.get("tool_input");
+    let pick = |k: &str| {
+        input
+            .and_then(|i| i.get(k))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    match tool {
+        "Read" | "Edit" | "Write" | "MultiEdit" => pick("file_path")
+            .or_else(|| pick("path"))
+            .unwrap_or_default(),
+        "Bash" => pick("command").unwrap_or_default(),
+        _ => pick("file_path")
+            .or_else(|| pick("command"))
+            .or_else(|| pick("path"))
+            .unwrap_or_default(),
+    }
+}
+
 /// Entry point. Always prints a valid hook response; never panics.
 pub fn posttooluse() {
     let out = run().unwrap_or_else(|_| PASS.to_string());
@@ -64,6 +98,17 @@ fn run() -> anyhow::Result<String> {
         .to_string();
     let session_id = crate::dedup::resolve_session_id(&payload);
 
+    // F1/F2 (0.5.0), both OPT-IN and default OFF — the default path is byte-for-
+    // byte unchanged. `target` is the tool's subject (file path for Read/Edit/
+    // Write, command for Bash), extracted before the mutable tool_response borrow.
+    let read_extract = env_on("ULTRACOS_READ_EXTRACT");
+    let gate_on = env_on("ULTRACOS_GATE");
+    let target = gate_target(&payload, &tool_name);
+    // F2: an Edit/Write/MultiEdit touching `target` is the "fix attempted" signal.
+    if gate_on && matches!(tool_name.as_str(), "Edit" | "Write" | "MultiEdit") {
+        crate::gate::note_edit(&session_id, &target);
+    }
+
     let Some(tool_response) = payload.get_mut("tool_response") else {
         return Ok(PASS.to_string());
     };
@@ -80,6 +125,52 @@ fn run() -> anyhow::Result<String> {
             else {
                 continue;
             };
+
+            // F1: read section-extraction (opt-in). Replaces a large Read result
+            // with outline + anchors + head; the full original is in the rewind
+            // store, retrievable by id+range. Reversible-lossy, so default OFF.
+            if read_extract && tool_name == "Read" {
+                if let Some(ex) = crate::extract::extract_read(&session_id, &text) {
+                    crate::audit::write_row(
+                        &session_id,
+                        &crate::audit::simple_event("read-extract", &tool_name, &session_id),
+                    );
+                    item["text"] = Value::String(ex.text);
+                    any_changed = true;
+                    continue; // extracted form stands in; rewind holds the original
+                }
+            }
+
+            // F2: state-aware gate (opt-in). FULL (stuck on target) preserves full
+            // signal; ULTRA (exact repeat) collapses to one line; STANDARD falls
+            // through to the normal dedup -> compact path. Default OFF.
+            if gate_on {
+                let is_err = crate::gate::looks_like_error(&text);
+                match crate::gate::decide(&session_id, &tool_name, &target, &text, is_err) {
+                    crate::gate::GateDecision::Full => {
+                        crate::audit::write_row(
+                            &session_id,
+                            &crate::audit::simple_event(
+                                "gate-full-preserve",
+                                &tool_name,
+                                &session_id,
+                            ),
+                        );
+                        continue; // stuck: preserve full signal, skip compaction
+                    }
+                    crate::gate::GateDecision::Ultra => {
+                        crate::audit::write_row(
+                            &session_id,
+                            &crate::audit::simple_event("gate-ultra", &tool_name, &session_id),
+                        );
+                        item["text"] =
+                            Value::String("[ultracos:gate identical repeat collapsed]".to_string());
+                        any_changed = true;
+                        continue;
+                    }
+                    crate::gate::GateDecision::Standard => {}
+                }
+            }
 
             // A8 session dedup (Read/Grep/Glob/Monitor only), BEFORE compaction.
             if crate::dedup::is_dedup_tool(&tool_name) {

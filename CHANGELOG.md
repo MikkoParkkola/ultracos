@@ -2,6 +2,28 @@
 
 All notable changes to UltraCoS. Format: [Keep a Changelog]. Versioning: [SemVer].
 
+## [0.5.0]
+
+### Added
+- **Read section-extraction + Rewind retrieval** (F1) — large file-reads are
+  compacted to a structural outline + every load-bearing anchor line + a head
+  preview, with each dropped body run replaced by a marker carrying its exact
+  retrieval range. The full original is stashed in a hash-addressed `rewind` store
+  (`<data_dir>/rewind/`), recoverable byte-for-byte by id+range via the new
+  `retrieve` MCP/CLI tool. Reversible-lossy, never lossy. Opt-in:
+  `ULTRACOS_READ_EXTRACT=1` (default OFF).
+- **State-aware Gate** (F2) — compression adapts to the agent's state: ULTRA
+  collapses an exact repeat to one line; FULL backs OFF when the agent is stuck
+  (same target failed >=2x and a fix was attempted) to preserve full signal;
+  STANDARD is the normal path. Opt-in: `ULTRACOS_GATE=1` (default OFF).
+- New subcommands: `extract-read <sid>`, `retrieve <sid> <id> [A-B]`.
+
+### Notes
+- Both features default OFF — the default codec path is byte-for-byte unchanged.
+- Validated before build (fail-fast on real session data): read-extraction GO
+  (12/13 reads >1K tok), Rewind essential (6/12 aggressive reads drop anchors),
+  Gate GO (97 stuck states / 387 events). See internal-ref / internal-ref.
+
 ## [0.4.0]
 
 ### Added
