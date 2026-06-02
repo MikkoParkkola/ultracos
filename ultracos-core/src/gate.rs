@@ -283,12 +283,14 @@ pub fn decide(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
 
-    /// Serialise env-mutation across all gate tests that touch ULTRACOS_STATE_DIR.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // All env-mutating tests across the crate share rewind::TEST_ENV_LOCK so gate,
+    // dedup, rewind and extract never race on the process-global ULTRACOS_STATE_DIR
+    // / ULTRACOS_REWIND_DIR. A gate-local lock would NOT serialise against dedup's
+    // cache-safety test (which also mutates ULTRACOS_STATE_DIR) — that cross-module
+    // race is what flaked gate::full_priority_beats_ultra on CI.
+    use crate::rewind::TEST_ENV_LOCK as ENV_LOCK;
 
     /// Set up a fresh, unique temp dir for a single test and point
     /// ULTRACOS_STATE_DIR at it. Returns the dir path; caller holds the

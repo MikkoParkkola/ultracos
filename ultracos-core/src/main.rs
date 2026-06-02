@@ -23,6 +23,7 @@ mod dedup;
 mod extract;
 mod gate;
 mod hook;
+mod readiness;
 mod rewind;
 mod signed_ccr;
 mod stats;
@@ -158,7 +159,16 @@ fn main() -> Result<()> {
             }
             let range = args.get(3).map(|s| s.as_str());
             match rewind::retrieve(session, id, range) {
-                Some(text) => print!("{text}"),
+                Some(text) => {
+                    // Audit the retrieval so F1 retrieval-rate (the default-on gate)
+                    // is measurable: a retrieve means extraction dropped something
+                    // the agent actually needed.
+                    audit::write_row(
+                        session,
+                        &audit::simple_event("rewind-retrieve", "retrieve", session),
+                    );
+                    print!("{text}");
+                }
                 None => {
                     eprintln!(
                         "ultracos: rewind id {id} not found (evicted or expired); re-read the source"
@@ -166,6 +176,12 @@ fn main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
+            Ok(())
+        }
+        // Measurement harness for the F1/F2 default-on decision: read the audit log
+        // and report extraction/retrieval/gate stats + a data-gated readiness verdict.
+        Some("feature-readiness") => {
+            println!("{}", readiness::from_data_dir().render());
             Ok(())
         }
         // F1 (internal-ref): read section-extraction. stdin = a Read tool result.
