@@ -1,0 +1,37 @@
+# CI — dependency-vulnerability gate for the ultracos-core Rust crate.
+#
+# This repo has no other CI workflow; this minimal one exists to gate every
+# PR and push on known, fixable vulnerabilities in the Cargo dependency tree
+# so a build can never ship a vuln that already has a fix available.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # Dependency-vulnerability gate: scans ultracos-core/Cargo.lock against the
+  # OSV database on every PR and push. Fails the build on any known, FIXABLE
+  # vuln so a security fix lands with the change that introduces (or fails to
+  # bump past) it — not weeks later. osv-scanner auto-detects the Cargo.lock;
+  # `--recursive ./` walks the whole tree from the repo root. Accepted or
+  # unfixable vulns are time-boxed in .github/osv-scanner.toml. ultracos ships
+  # no container image, so no separate trivy image scan is needed.
+  osv-scan:
+    name: OSV vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Scan Cargo dependencies against OSV
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        with:
+          scan-args: |-
+            --config=.github/osv-scanner.toml
+            --recursive
+            ./
