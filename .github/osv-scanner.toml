@@ -6,10 +6,10 @@
 # past) it — not weeks later.
 #
 # Scope (verified by local run 2026-06-05): Cargo crates — osv-scanner reads
-# ultracos-core/Cargo.lock and checks every dependency against the OSV
+# glyphdown-core/Cargo.lock and checks every dependency against the OSV
 # database. NOT covered: github-actions advisories (our actions are SHA-pinned,
 # which is itself the mitigation, and osv-scanner does not map SHA pins to
-# advisory versions) and Docker base-image OS-layer CVEs (ultracos ships no
+# advisory versions) and Docker base-image OS-layer CVEs (glyphdown ships no
 # container image, so there is no image layer to scan). This covers the
 # primary attack surface: the Rust crate dependency tree.
 #

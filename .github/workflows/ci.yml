@@ -1,4 +1,4 @@
-# CI — dependency-vulnerability gate for the ultracos-core Rust crate.
+# CI — dependency-vulnerability gate for the glyphdown-core Rust crate.
 #
 # This repo has no other CI workflow; this minimal one exists to gate every
 # PR and push on known, fixable vulnerabilities in the Cargo dependency tree
@@ -16,12 +16,12 @@ permissions:
   contents: read
 
 jobs:
-  # Dependency-vulnerability gate: scans ultracos-core/Cargo.lock against the
+  # Dependency-vulnerability gate: scans glyphdown-core/Cargo.lock against the
   # OSV database on every PR and push. Fails the build on any known, FIXABLE
   # vuln so a security fix lands with the change that introduces (or fails to
   # bump past) it — not weeks later. osv-scanner auto-detects the Cargo.lock;
   # `--recursive ./` walks the whole tree from the repo root. Accepted or
-  # unfixable vulns are time-boxed in .github/osv-scanner.toml. ultracos ships
+  # unfixable vulns are time-boxed in .github/osv-scanner.toml. glyphdown ships
   # no container image, so no separate trivy image scan is needed.
   osv-scan:
     name: OSV vulnerability scan
